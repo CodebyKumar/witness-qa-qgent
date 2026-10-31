@@ -1,6 +1,7 @@
 export type Severity = "critical" | "high" | "medium" | "low";
 export type Verdict = "PASS" | "FAIL" | "BLOCKED" | "ERROR";
-export type CaseStatus = "queued" | "running" | "verifying" | "done";
+export type CaseStatus = "queued" | "running" | "verifying" | "done" | "cancelled";
+export type RunControl = "running" | "paused" | "stopped" | "finished";
 
 export interface TestCase {
   id: string;
@@ -36,7 +37,7 @@ export interface TestResult {
   tfStatus?: string;
   tfError?: string;
   numSteps?: number;
-  tfSteps?: { id: string; action: string; duration?: string }[];
+  shots?: { id: string; action: string }[]; // steps whose screenshot is saved under data/shots/<tinyfishRunId>/
   videoUrl?: string;
   verdict?: Verdict;
   reason?: string;
@@ -44,6 +45,7 @@ export interface TestResult {
   observedText?: string;
   reproSteps?: string[];
   likelyCause?: string;
+  checkedScreenshot?: boolean; // the verifier read the final screenshot, not just the agent's words
   startedAt?: string;
   finishedAt?: string;
 }
@@ -52,6 +54,7 @@ export interface Run {
   id: string;
   url: string;
   createdAt: string;
+  control: RunControl;
   cases: TestCase[];
   results: Record<string, TestResult>;
 }

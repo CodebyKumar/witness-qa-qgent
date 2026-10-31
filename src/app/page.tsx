@@ -15,19 +15,27 @@ const TEMPLATES: Record<string, string> = {
 
 const SAMPLES = [
   {
-    label: "Demo shop (seeded bugs)",
+    label: "Demo shop with seeded bugs",
     url: process.env.NEXT_PUBLIC_DEMO_URL ?? "",
     checklist: "Sign up with a new account\nAdd two items to the cart and check the total\nApply coupon SAVE10 and check the 10% discount\nOpen the shipping policy from the footer",
   },
   {
-    label: "SauceDemo (real third-party site)",
+    label: "SauceDemo, a real third-party site",
     url: "https://www.saucedemo.com",
     checklist:
       "Log in as standard_user with password secret_sauce and check the products page shows\nLog in as problem_user with password secret_sauce, sort products by Price (low to high) and check the cheapest item is first\nLog in as standard_user with a wrong password and check an error is shown",
   },
 ].filter((s) => s.url);
 
-type Plan = { url: string; pageTitle: string; linkCount: number; cases: TestCase[] };
+const SEVERITIES: Severity[] = ["critical", "high", "medium", "low"];
+
+type Plan = { url: string; pageTitle: string; linkCount: number; cases: TestCase[]; warning?: string };
+
+async function post<T>(path: string, body: unknown): Promise<{ data?: T; error?: string }> {
+  const res = await fetch(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+  const data = await res.json().catch(() => ({ error: `Server error ${res.status}` }));
+  return res.ok ? { data } : { error: data.error ?? `Server error ${res.status}` };
+}
 
 export default function NewRun() {
   const router = useRouter();
@@ -35,43 +43,57 @@ export default function NewRun() {
   const [checklist, setChecklist] = useState("");
   const [authorized, setAuthorized] = useState(false);
   const [plan, setPlan] = useState<Plan | null>(null);
-  const [busy, setBusy] = useState<"" | "planning" | "starting">("");
+  const [more, setMore] = useState("");
+  const [busy, setBusy] = useState<"" | "planning" | "more" | "starting">("");
   const [error, setError] = useState("");
-
-  async function post<T>(path: string, body: unknown): Promise<T | null> {
-    setError("");
-    const res = await fetch(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
-    const data = await res.json().catch(() => ({ error: `Server error ${res.status}` }));
-    if (!res.ok) {
-      setError(data.error ?? `Server error ${res.status}`);
-      return null;
-    }
-    return data as T;
-  }
 
   async function planTests(e: React.FormEvent) {
     e.preventDefault();
     setBusy("planning");
-    const p = await post<Plan>("/api/plan", { url, checklist });
+    setError("");
+    const { data, error } = await post<Plan>("/api/plan", { url, checklist });
     setBusy("");
-    if (p) setPlan(p);
+    if (data) setPlan(data);
+    else setError(error!);
+  }
+
+  async function planMore() {
+    if (!plan || !more.trim()) return;
+    setBusy("more");
+    setError("");
+    const { data, error } = await post<Plan>("/api/plan", { url: plan.url, checklist: more, existing: plan.cases.map((c) => c.title) });
+    setBusy("");
+    if (data) {
+      setPlan({ ...plan, cases: [...plan.cases, ...data.cases] });
+      setMore("");
+    } else setError(error!);
   }
 
   async function startRun() {
     if (!plan) return;
+    const incomplete = plan.cases.findIndex((c) => !c.title.trim() || !c.steps.some((s) => s.trim()) || !c.expected.trim());
+    if (incomplete >= 0) {
+      setError(`TC-${String(incomplete + 1).padStart(2, "0")} needs a title, at least one step and an expected result.`);
+      document.getElementById(`${plan.cases[incomplete].id}-title`)?.focus();
+      return;
+    }
     setBusy("starting");
-    const r = await post<{ id: string }>("/api/runs", { url: plan.url, cases: plan.cases, authorized });
-    if (r) router.push(`/runs/${r.id}`);
-    else setBusy("");
+    setError("");
+    const { data, error } = await post<{ id: string }>("/api/runs", { url: plan.url, cases: plan.cases, authorized });
+    if (data) router.push(`/runs/${data.id}`);
+    else {
+      setError(error!);
+      setBusy("");
+    }
   }
 
-  const edit = (id: string, patch: Partial<TestCase>) =>
-    setPlan((p) => p && { ...p, cases: p.cases.map((c) => (c.id === id ? { ...c, ...patch } : c)) });
+  const edit = (id: string, patch: Partial<TestCase>) => setPlan((p) => p && { ...p, cases: p.cases.map((c) => (c.id === id ? { ...c, ...patch } : c)) });
   const remove = (id: string) => setPlan((p) => p && { ...p, cases: p.cases.filter((c) => c.id !== id) });
   const add = () =>
-    setPlan((p) => p && { ...p, cases: [...p.cases, { id: `tc-new-${Date.now()}`, title: "", steps: [""], expected: "", severity: "medium", destructive: false }] });
+    setPlan((p) => p && { ...p, cases: [...p.cases, { id: `manual-${Date.now()}`, title: "", steps: [""], expected: "", severity: "medium", destructive: false }] });
 
-  const destructive = plan?.cases.filter((c) => c.destructive && c.allowSubmit).length ?? 0;
+  const liveSubmits = plan?.cases.filter((c) => c.destructive && c.allowSubmit).length ?? 0;
+  const bySeverity = SEVERITIES.map((s) => [s, plan?.cases.filter((c) => c.severity === s).length ?? 0] as const).filter(([, n]) => n);
 
   return (
     <>
@@ -99,47 +121,55 @@ export default function NewRun() {
         </ol>
       </section>
 
-      <form className="panel" onSubmit={planTests} aria-labelledby="setup-head">
-        <h2 id="setup-head">1. What to test</h2>
-        <div className="field">
-          <label htmlFor="url">Target URL</label>
-          <input id="url" name="url" type="url" inputMode="url" autoComplete="url" required placeholder="https://staging.yoursite.com" value={url} onChange={(e) => setUrl(e.target.value)} />
-          <small>Public sites only. Use a staging site when the checklist places orders or deletes data.</small>
+      <form className="panel setup" onSubmit={planTests} aria-labelledby="setup-head">
+        <div className="panel__head">
+          <h2 id="setup-head">1. What to test</h2>
         </div>
-
-        <div className="field">
-          <label htmlFor="checklist">Checklist, one check per line</label>
-          <textarea id="checklist" name="checklist" required rows={6} placeholder={"Sign up with a new account\nAdd two items to the cart and check the total\nApply coupon SAVE10"} value={checklist} onChange={(e) => setChecklist(e.target.value)} />
-          <div className="cells" role="group" aria-label="Add a template">
-            {Object.entries(TEMPLATES).map(([name, text]) => (
-              <button key={name} type="button" className="cell" onClick={() => setChecklist((c) => (c.trim() ? `${c.trim()}\n${text}` : text))}>
-                + {name}
-              </button>
-            ))}
-          </div>
-        </div>
-
-        {SAMPLES.length > 0 && (
-          <div className="field">
-            <span className="field__label">Or load a sample</span>
-            <div className="cells" role="group" aria-label="Load a sample">
-              {SAMPLES.map((s) => (
-                <button key={s.label} type="button" className="cell" onClick={() => (setUrl(s.url), setChecklist(s.checklist))}>
-                  {s.label}
-                </button>
-              ))}
+        <div className="setup__grid">
+          <div className="setup__main">
+            <div className="field">
+              <label htmlFor="url">Target URL</label>
+              <input id="url" name="url" type="url" inputMode="url" autoComplete="url" required placeholder="https://staging.yoursite.com" value={url} onChange={(e) => setUrl(e.target.value)} />
+              <small>Public sites only. Use a staging site when the checklist places orders or deletes data.</small>
+            </div>
+            <div className="field">
+              <label htmlFor="checklist">Checklist</label>
+              <textarea id="checklist" name="checklist" required rows={7} placeholder={"One check per line, or write it as a paragraph.\nSign up with a new account\nAdd two items to the cart and check the total\nApply coupon SAVE10"} value={checklist} onChange={(e) => setChecklist(e.target.value)} />
+              <small>Each check becomes its own test case. Form checks also get an invalid-input case.</small>
             </div>
           </div>
-        )}
-
-        <label className="check">
-          <input type="checkbox" checked={authorized} onChange={(e) => setAuthorized(e.target.checked)} required />
-          <span>I own this site or have permission to test it</span>
-        </label>
-
-        <div className="actions">
+          <div className="setup__side">
+            <div className="field">
+              <span className="field__label">Add a template</span>
+              <div className="cells" role="group" aria-label="Add a template">
+                {Object.entries(TEMPLATES).map(([name, text]) => (
+                  <button key={name} type="button" className="cell" onClick={() => setChecklist((c) => (c.trim() ? `${c.trim()}\n${text}` : text))}>
+                    {name}
+                  </button>
+                ))}
+              </div>
+            </div>
+            {SAMPLES.length > 0 && (
+              <div className="field">
+                <span className="field__label">Or load a sample</span>
+                <div className="stack">
+                  {SAMPLES.map((s) => (
+                    <button key={s.label} type="button" className="cell cell--block" onClick={() => (setUrl(s.url), setChecklist(s.checklist))}>
+                      {s.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+        <div className="setup__foot">
+          <label className="check">
+            <input type="checkbox" checked={authorized} onChange={(e) => setAuthorized(e.target.checked)} required />
+            <span>I own this site or have permission to test it</span>
+          </label>
           <button type="submit" className="btn btn--primary" disabled={busy !== ""}>
-            {busy === "planning" ? "Reading the site and planning..." : plan ? "Plan again" : "Plan test cases"}
+            {busy === "planning" ? "Reading the site and planning..." : plan ? "Plan again from scratch" : "Plan test cases"}
           </button>
         </div>
         {error && !plan && <p className="alert" role="alert">{error}</p>}
@@ -147,6 +177,7 @@ export default function NewRun() {
 
       {busy === "planning" && !plan && (
         <section className="panel" aria-busy="true" aria-label="Planning">
+          <p className="muted">TinyFish Fetch is reading the site, then the planner writes test cases. This takes about 15 seconds.</p>
           <div className="skeleton" />
           <div className="skeleton" />
           <div className="skeleton" />
@@ -154,80 +185,109 @@ export default function NewRun() {
       )}
 
       {plan && (
-        <section className="panel" aria-labelledby="review-head">
-          <div className="panel__head">
-            <h2 id="review-head">2. Review {plan.cases.length} test cases</h2>
-            <p className="muted">
-              TinyFish Fetch read <strong>{plan.pageTitle || plan.url}</strong> and found {plan.linkCount} links. Edit anything before it runs.
-            </p>
+        <section className="panel review" aria-labelledby="review-head">
+          <div className="review__head">
+            <div className="panel__head">
+              <h2 id="review-head">2. Review {plan.cases.length} test cases</h2>
+              <p className="muted">
+                TinyFish Fetch read <strong>{plan.pageTitle || plan.url}</strong> and found {plan.linkCount} links. Edit, delete or add cases before they run.
+              </p>
+            </div>
+            {bySeverity.length > 0 && (
+              <dl className="sevcount" aria-label="Cases by severity">
+                {bySeverity.map(([s, n]) => (
+                  <div key={s}>
+                    <dt>{s}</dt>
+                    <dd className="num">{n}</dd>
+                  </div>
+                ))}
+              </dl>
+            )}
           </div>
 
-          {destructive > 0 && (
+          {plan.warning && <p className="alert alert--warn" role="status">{plan.warning}</p>}
+
+          {liveSubmits > 0 && (
             <p className="alert alert--warn" role="status">
-              {destructive} case{destructive > 1 ? "s" : ""} will really place an order, pay or delete data. Point the URL at staging, or untick &quot;Allow final submit&quot;.
+              {liveSubmits} case{liveSubmits > 1 ? "s" : ""} will really place an order, pay or delete data. Point the URL at staging, or untick &quot;Allow final submit&quot;.
             </p>
           )}
 
           <ol className="cases">
             {plan.cases.map((c, i) => (
               <li key={c.id} className="case">
-                <div className="case__id num">TC-{String(i + 1).padStart(2, "0")}</div>
-                <div className="case__body">
-                  <label className="visually-hidden" htmlFor={`${c.id}-title`}>Title</label>
+                <div className="case__head">
+                  <span className="case__id num">TC-{String(i + 1).padStart(2, "0")}</span>
+                  <label className="visually-hidden" htmlFor={`${c.id}-title`}>Title of TC-{i + 1}</label>
                   <input id={`${c.id}-title`} className="case__title" value={c.title} placeholder="Test case title" onChange={(e) => edit(c.id, { title: e.target.value })} />
-                  <div className="case__grid">
-                    <div className="field">
-                      <label htmlFor={`${c.id}-steps`}>Steps, one per line</label>
-                      <textarea id={`${c.id}-steps`} rows={Math.max(3, c.steps.length)} value={c.steps.join("\n")} onChange={(e) => edit(c.id, { steps: e.target.value.split("\n") })} />
-                    </div>
-                    <div className="field">
-                      <label htmlFor={`${c.id}-expected`}>Expected result</label>
-                      <textarea id={`${c.id}-expected`} rows={3} value={c.expected} onChange={(e) => edit(c.id, { expected: e.target.value })} />
-                      {c.testData && <small>Test data: {c.testData}</small>}
-                    </div>
+                  <label className="visually-hidden" htmlFor={`${c.id}-sev`}>Severity</label>
+                  <select id={`${c.id}-sev`} value={c.severity} onChange={(e) => edit(c.id, { severity: e.target.value as Severity })}>
+                    {SEVERITIES.map((s) => (
+                      <option key={s} value={s}>{s}</option>
+                    ))}
+                  </select>
+                  <button type="button" className="link-btn" onClick={() => remove(c.id)} aria-label={`Delete TC-${i + 1}`}>
+                    Delete
+                  </button>
+                </div>
+                <div className="case__grid">
+                  <div className="field">
+                    <label htmlFor={`${c.id}-steps`}>Steps, one per line</label>
+                    <textarea id={`${c.id}-steps`} rows={Math.max(4, c.steps.length)} value={c.steps.join("\n")} onChange={(e) => edit(c.id, { steps: e.target.value.split("\n") })} />
                   </div>
-                  {c.clarification && (
-                    <p className="note">
-                      <strong>Planner assumption:</strong> {c.clarification}
-                    </p>
-                  )}
+                  <div className="field">
+                    <label htmlFor={`${c.id}-expected`}>Expected result</label>
+                    <textarea id={`${c.id}-expected`} rows={4} value={c.expected} onChange={(e) => edit(c.id, { expected: e.target.value })} />
+                  </div>
+                </div>
+                {(c.testData || c.clarification || c.autoAdded || c.destructive) && (
                   <div className="case__meta">
-                    <label>
-                      Severity{" "}
-                      <select value={c.severity} onChange={(e) => edit(c.id, { severity: e.target.value as Severity })}>
-                        <option value="critical">critical</option>
-                        <option value="high">high</option>
-                        <option value="medium">medium</option>
-                        <option value="low">low</option>
-                      </select>
-                    </label>
-                    {c.destructive && <span className="tag tag--warn">Destructive</span>}
                     {c.autoAdded && <span className="tag">Negative case, added by planner</span>}
+                    {c.destructive && <span className="tag tag--warn">Destructive</span>}
                     {c.destructive && (
                       <label className="check check--inline">
                         <input type="checkbox" checked={!!c.allowSubmit} onChange={(e) => edit(c.id, { allowSubmit: e.target.checked })} />
                         <span>Allow final submit</span>
                       </label>
                     )}
-                    <button type="button" className="link-btn" onClick={() => remove(c.id)}>
-                      Delete
-                    </button>
+                    {c.testData && <span className="muted">Test data: {c.testData}</span>}
+                    {c.clarification && (
+                      <p className="note">
+                        <strong>Planner assumption:</strong> {c.clarification}
+                      </p>
+                    )}
                   </div>
-                </div>
+                )}
               </li>
             ))}
           </ol>
 
-          <div className="actions">
-            <button type="button" className="btn" onClick={add}>
-              Add test case
-            </button>
+          <div className="more">
+            <div className="field">
+              <label htmlFor="more">Add more checks</label>
+              <textarea id="more" rows={3} placeholder={"Check the footer links work\nSearch for a product that does not exist"} value={more} onChange={(e) => setMore(e.target.value)} />
+              <small>Only the new checks are planned. Your edits above stay as they are.</small>
+            </div>
+            <div className="actions">
+              <button type="button" className="btn" onClick={planMore} disabled={busy !== "" || !more.trim()}>
+                {busy === "more" ? "Planning..." : "Plan these checks"}
+              </button>
+              <button type="button" className="btn" onClick={add}>
+                Write a case by hand
+              </button>
+            </div>
+          </div>
+
+          {error && <p className="alert" role="alert">{error}</p>}
+          <div className="runbar">
+            <span>
+              {plan.cases.length} test case{plan.cases.length === 1 ? "" : "s"} on <strong>{new URL(plan.url).host}</strong>
+              {!authorized && <span className="muted">. Tick the permission box above to run.</span>}
+            </span>
             <button type="button" className="btn btn--primary" onClick={startRun} disabled={busy !== "" || !plan.cases.length || !authorized}>
               {busy === "starting" ? "Starting..." : `Run ${plan.cases.length} tests on TinyFish`}
             </button>
           </div>
-          {!authorized && <small>Tick the permission box above to run.</small>}
-          {error && <p className="alert" role="alert">{error}</p>}
         </section>
       )}
     </>

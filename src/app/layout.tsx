@@ -1,9 +1,10 @@
 import type { Metadata } from "next";
-import { Chivo_Mono } from "next/font/google";
+import localFont from "next/font/local";
 import Link from "next/link";
 import "./globals.css";
 
-const chivo = Chivo_Mono({ variable: "--font-chivo-mono", subsets: ["latin"], weight: ["400", "500", "800"] });
+// Self-hosted: next/font/google breaks on Google's extensionless font URLs, and this needs no network at build.
+const chivo = localFont({ src: "./fonts/chivo-mono-latin.woff2", variable: "--font-chivo-mono", weight: "100 900", display: "swap" });
 
 export const metadata: Metadata = {
   title: "Witness - plain-English website testing on TinyFish",
