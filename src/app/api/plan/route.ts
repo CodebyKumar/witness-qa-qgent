@@ -1,5 +1,5 @@
 import { planTests } from "@/lib/llm";
-import { fetchPage } from "@/lib/tinyfish";
+import { readSite } from "@/lib/tinyfish";
 
 export const maxDuration = 300;
 
@@ -17,9 +17,9 @@ export async function POST(req: Request) {
   try {
     // A bot-blocked or script-only site shouldn't stop planning: fall back to the checklist alone.
     let warning = "";
-    const page = await fetchPage(target.href).catch((err: Error) => {
+    const page = await readSite(target.href, checklist).catch((err: Error) => {
       warning = `TinyFish Fetch could not read the page (${err.message}). Cases were planned from your checklist alone, so check the button names.`;
-      return { title: "", text: "(The page could not be read. Describe elements by their likely visible label.)", links: [] as string[] };
+      return { title: "", text: "(The site could not be read. Describe elements by their likely visible label.)", links: [] as string[], pagesRead: 0 };
     });
     const runTag = Date.now().toString(36);
     const titles = (existing ?? []).filter((t) => typeof t === "string").slice(0, 30);
@@ -29,6 +29,7 @@ export async function POST(req: Request) {
       url: target.href,
       pageTitle: page.title,
       linkCount: page.links.length,
+      pagesRead: page.pagesRead,
       warning,
       cases: cases.map((c, i) => ({ ...c, id: `${stamp}-${i}` })),
     });

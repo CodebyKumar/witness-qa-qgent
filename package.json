@@ -7,7 +7,7 @@
     "build": "next build",
     "start": "next start",
     "smoke": "node --env-file=.env.local --experimental-strip-types scripts/smoke.ts",
-    "check": "node --experimental-strip-types scripts/llm-fallback.check.ts"
+    "check": "node --experimental-strip-types scripts/llm-fallback.check.ts && node --experimental-strip-types scripts/recon.check.ts"
   },
   "dependencies": {
     "@tiny-fish/sdk": "^0.11.0",

@@ -8,6 +8,18 @@ const MODELS = (process.env.GROQ_MODELS ?? "openai/gpt-oss-120b,qwen/qwen3.8-27b
   .map((m) => m.trim())
   .filter(Boolean);
 
+// Groq free tier allows 8K tokens per minute per model, and the prompt plus the requested answer both count.
+// Estimate conservatively (3.5 characters per token) and keep every call under this ceiling.
+const TPM_LIMIT = Number(process.env.GROQ_TPM_LIMIT ?? 8000);
+const IMAGE_TOKENS = 2048; // Groq counts each image as 2048 input tokens
+export const estTokens = (text: string) => Math.ceil(text.length / 3.5);
+
+/** Cut text so the whole call (fixed prompt + this text + answer) fits the token ceiling. */
+function fitText(text: string, fixedTokens: number, answerTokens: number) {
+  const room = (TPM_LIMIT - answerTokens - fixedTokens - 200) * 3.5; // 200 tokens of slack for message framing
+  return text.length <= room ? text : text.slice(0, Math.max(0, Math.floor(room))) + "\n(truncated to fit the model's limit)";
+}
+
 class FallThrough extends Error {
   retryAfterS: number;
   constructor(msg: string, retryAfterS = 0) {
@@ -112,33 +124,24 @@ export async function planTests(
   runTag: string,
   existing: string[] = [],
 ): Promise<Omit<TestCase, "id">[]> {
-  const { cases } = await askJson(
-    `You are a senior QA engineer writing manual test cases for a browser agent that follows steps literally.
+  const system = `You are a senior QA engineer writing manual test cases for a browser agent that follows steps literally.
 Rules:
 - The checklist may be one check per line or free text. Split it into distinct checks and write one test case per check, in the order given. A line that asks for several separate checks becomes several cases.
 - Each case is one flow of 3 to 8 short imperative steps, starting from the given URL. Include login steps in every case that needs a logged-in state, because each case runs in a fresh browser.
-- Name real UI from the page snapshot (button labels, link text, form fields). If the element isn't in the snapshot, describe it visually ("the cart icon in the header").
-- "expected" is concrete and checkable: exact messages, totals, URLs or visible state. Never "works correctly".
+- Name real UI from the site snapshot (button labels, link text, form fields), using the page each label appears on. If an element isn't in the snapshot, describe it visually ("the cart icon in the header").
+- "expected" is concrete and checkable: totals, URLs, visible state. Never "works correctly". Quote exact message text only if it appears in the site snapshot; for messages you cannot see there, describe them ("an error message saying the code is invalid") so wording differences are not reported as bugs.
 - severity: critical (blocks purchase, signup or login), high (core feature wrong), medium (secondary feature), low (cosmetic or content).
 - destructive: true if any step places an order, pays, deletes, or sends a real message.
 - For a line that tests a form, add ONE extra negative case right after it (invalid input, expect a validation error), with autoAdded: true.
 - testData: unique values when a form needs them, e.g. "Name: Test User, Email: qa+${runTag}@example.com, Password: Qa!${runTag}x9".
 - Write at most 15 cases in total.
 - If a line is too vague to write a checkable expected result, still write your best case and put one short question in "clarification" stating your assumption.
-Return {"cases":[{"title","steps","expected","severity","destructive","autoAdded"?,"testData"?,"clarification"?}]}.`,
-    `URL: ${url}
-Page title: ${page.title}
-Page snapshot (markdown, truncated):
-${page.text}
-
-Links on the page:
-${page.links.join("\n")}
-
-${existing.length ? `These test cases already exist. Do not repeat them; write cases only for the new checks:\n${existing.map((t) => `- ${t}`).join("\n")}\n\n` : ""}Checklist:
-${checklist}`,
-    planSchema,
-    3000,
-  );
+Return {"cases":[{"title","steps","expected","severity","destructive","autoAdded"?,"testData"?,"clarification"?}]}.`;
+  const head = `URL: ${url}\nSite title: ${page.title}\nSite snapshot (several pages, condensed):\n`;
+  const tail = `\n\nLinks on the start page:\n${page.links.join("\n")}\n\n${existing.length ? `These test cases already exist. Do not repeat them; write cases only for the new checks:\n${existing.map((t) => `- ${t}`).join("\n")}\n\n` : ""}Checklist:\n${checklist}`;
+  const ANSWER = 3000;
+  const snapshot = fitText(page.text, estTokens(system + head + tail), ANSWER);
+  const { cases } = await askJson(system, head + snapshot + tail, planSchema, ANSWER);
   // The model may send null for optional fields; keep the TestCase shape clean.
   return cases.slice(0, 15).map((c) => ({
     ...c,
@@ -172,21 +175,25 @@ const SCREENSHOT_RULE = `
 
 /** Verdict from the agent's observations, checked against the final screenshot when there is one. */
 export async function verify(tc: TestCase, obs: Observation | null, agentText: string, finalShot?: Buffer) {
-  const user = `Test case: ${tc.title}
+  const head = `Test case: ${tc.title}
 Steps:
 ${tc.steps.map((s, i) => `${i + 1}. ${s}`).join("\n")}
 Expected: ${tc.expected}
 
-Agent observations (JSON):
-${obs ? JSON.stringify(obs, null, 2) : "(no structured observation)"}
-${agentText ? `\nAdditional run information:\n${agentText.slice(0, 3000)}` : ""}`;
+Agent observations and run information:
+`;
+  // Long runs produce long observations: compact JSON, trimmed so rules + evidence + image + answer fit the ceiling.
+  const evidence = `${obs ? JSON.stringify(obs) : "(no structured observation)"}${agentText ? `\n${agentText}` : ""}`;
   if (finalShot) {
     try {
+      const fixed = estTokens(VERIFY_RULES + SCREENSHOT_RULE + head) + IMAGE_TOKENS;
+      const user = head + fitText(evidence, fixed, 1500);
       const v = await askJson(VERIFY_RULES + SCREENSHOT_RULE, user, verdictSchema, 1500, `data:image/jpeg;base64,${finalShot.toString("base64")}`);
       return { ...v, checkedScreenshot: true };
     } catch {
       // Vision model limited or unavailable: fall back to judging the observations alone.
     }
   }
+  const user = head + fitText(evidence, estTokens(VERIFY_RULES + head), 1200);
   return { ...(await askJson(VERIFY_RULES, user, verdictSchema, 1200)), checkedScreenshot: false };
 }

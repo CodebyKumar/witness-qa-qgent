@@ -12,19 +12,91 @@ const TINYFISH_STRICT_BETA = process.env.TF_STRICT_BETA === "true";
 // TinyFish did not enforce max_duration_seconds in testing (a run went 317s on a 240s cap), so runs.ts also enforces it.
 export const MAX_DURATION_S = Number(process.env.TF_MAX_DURATION_S ?? 150);
 
-/** Recon: read the target page as markdown + links so the planner names real UI. */
-export async function fetchPage(url: string) {
+// Recon budget, sized for Groq's free tier (8K tokens per minute, about 4 characters per token):
+// the whole site snapshot stays under SITE_CHARS so the planner prompt plus its answer fit in one call.
+const SITE_CHARS = 9000;
+const START_PAGE_CHARS = 3200;
+const EXTRA_PAGES = 4;
+const MAX_LINKS = 30;
+
+type FetchedPage = { url: string; title: string; text: string; links: string[] };
+
+async function fetchPages(urls: string[], withLinks: boolean): Promise<{ pages: FetchedPage[]; errors: string[] }> {
   const res = await tf().fetch.getContents({
-    urls: [url],
+    urls,
     format: "markdown",
-    links: true,
-    purpose: "Read a website's landing page to plan QA test cases that reference its real buttons, forms and links",
+    links: withLinks,
+    ttl: 0, // live read: a cached copy would plan tests against an old version of the site
+    per_url_timeout_ms: 30_000,
+    purpose: "Read a website's pages to plan QA test cases that reference its real buttons, forms and links",
   });
-  const page = res.results[0];
-  if (!page) throw new Error(res.errors[0]?.error ?? `TinyFish Fetch could not read ${url}`);
-  const text = "text" in page && typeof page.text === "string" ? page.text : "";
-  // Trimmed to fit Groq free-tier limits (8K tokens per minute).
-  return { title: page.title ?? "", text: text.slice(0, 6000), links: (page.links ?? []).slice(0, 40) };
+  const pages = res.results.map((p) => ({
+    url: p.final_url ?? p.url,
+    title: p.title ?? "",
+    text: "text" in p && typeof p.text === "string" ? p.text : "",
+    links: p.links ?? [],
+  }));
+  return { pages, errors: res.errors.map((e) => `${e.url}: ${e.error}`) };
+}
+
+/** Drop blank and repeated lines (nav and footers repeat on every page), then cut to the budget. */
+function compact(text: string, budget: number) {
+  const seen = new Set<string>();
+  const lines = text
+    .split("\n")
+    .map((l) => l.replace(/\s+/g, " ").trim())
+    .filter((l) => l && !seen.has(l) && seen.add(l));
+  const out = lines.join("\n");
+  return out.length > budget ? out.slice(0, budget) + "\n(truncated)" : out;
+}
+
+/** Same-site pages worth reading, ranked by how many checklist words appear in their address. */
+export function pickPages(start: string, links: string[], checklist: string, max = EXTRA_PAGES) {
+  const origin = new URL(start).origin;
+  const startPath = new URL(start).pathname.replace(/\/(index\.html?)?$/, "/");
+  const words = new Set(checklist.toLowerCase().match(/[a-z]{3,}/g) ?? []);
+  const seen = new Set<string>();
+  const candidates: { url: string; score: number; order: number }[] = [];
+  links.forEach((raw, order) => {
+    let u: URL;
+    try {
+      u = new URL(raw, start);
+    } catch {
+      return;
+    }
+    u.hash = "";
+    const path = u.pathname.replace(/\/(index\.html?)?$/, "/");
+    if (u.origin !== origin || path === startPath || seen.has(path)) return;
+    if (/\.(pdf|jpe?g|png|gif|svg|zip|mp4)$/i.test(path) || /log-?out|sign-?out/i.test(path)) return;
+    seen.add(path);
+    const score = path.toLowerCase().split(/[^a-z]+/).filter((w) => words.has(w)).length;
+    candidates.push({ url: u.href, score, order });
+  });
+  return candidates
+    .sort((a, b) => b.score - a.score || a.order - b.order)
+    .slice(0, max)
+    .map((c) => c.url);
+}
+
+/** Recon: the start page plus a few linked pages on the same site, compacted to a fixed character budget. */
+export async function readSite(url: string, checklist: string) {
+  const first = await fetchPages([url], true);
+  const home = first.pages[0];
+  if (!home) throw new Error(first.errors[0] ?? `TinyFish Fetch could not read ${url}`);
+
+  const extraUrls = pickPages(home.url, home.links, checklist);
+  const extra = extraUrls.length ? await fetchPages(extraUrls, false).catch(() => ({ pages: [] as FetchedPage[], errors: [] })) : { pages: [] as FetchedPage[] };
+  const read = extra.pages.filter((p) => p.text.trim());
+
+  const perPage = read.length ? Math.floor((SITE_CHARS - START_PAGE_CHARS) / read.length) : 0;
+  const path = (u: string) => new URL(u).pathname || "/";
+  const sections = [
+    `## Start page ${path(home.url)} (${home.title})\n${compact(home.text, read.length ? START_PAGE_CHARS : SITE_CHARS)}`,
+    ...read.map((p) => `## Page ${path(p.url)} (${p.title})\n${compact(p.text, perPage)}`),
+  ];
+  const origin = new URL(home.url).origin;
+  const links = [...new Set(home.links.filter((l) => l.startsWith(origin)).map(path))].slice(0, MAX_LINKS);
+  return { title: home.title, text: sections.join("\n\n"), links, pagesRead: 1 + read.length };
 }
 
 // Allowed output_schema keywords only (no additionalProperties / const / oneOf).
