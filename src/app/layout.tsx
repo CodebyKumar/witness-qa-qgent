@@ -1,10 +1,12 @@
 import type { Metadata } from "next";
 import localFont from "next/font/local";
-import Link from "next/link";
+import Sidebar from "./sidebar";
 import "./globals.css";
 
 // Self-hosted: next/font/google breaks on Google's extensionless font URLs, and this needs no network at build.
-const chivo = localFont({ src: "./fonts/chivo-mono-latin.woff2", variable: "--font-chivo-mono", weight: "100 900", display: "swap" });
+const sans = localFont({ src: "./fonts/geist-latin.woff2", variable: "--font-geist", weight: "100 900", display: "swap" });
+const mono = localFont({ src: "./fonts/geist-mono-latin.woff2", variable: "--font-geist-mono", weight: "100 900", display: "swap" });
+const brand = localFont({ src: "./fonts/fraunces-latin.woff2", variable: "--font-brand", weight: "400 700", display: "swap" });
 
 export const metadata: Metadata = {
   title: "Witness - plain-English website testing on TinyFish",
@@ -13,21 +15,12 @@ export const metadata: Metadata = {
 
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
   return (
-    <html lang="en" className={chivo.variable}>
+    <html lang="en" className={`${sans.variable} ${mono.variable} ${brand.variable}`}>
       <body>
-        <header className="topbar">
-          <div className="container topbar__inner">
-            <Link href="/" className="wordmark" aria-label="Witness, new test run">
-              Witness
-            </Link>
-            <span className="topbar__by">QA agent on TinyFish</span>
-            <nav aria-label="Main" className="topbar__nav">
-              <Link href="/">New run</Link>
-              <Link href="/runs">Run history</Link>
-            </nav>
-          </div>
-        </header>
-        <main className="container page">{children}</main>
+        <div className="shell">
+          <Sidebar />
+          <main className="page">{children}</main>
+        </div>
       </body>
     </html>
   );

@@ -3,6 +3,7 @@
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 import type { Severity, TestCase } from "@/lib/types";
+import Select, { type Option } from "./select";
 
 const TEMPLATES: Record<string, string> = {
   Login: "Log in with valid credentials and check the account page loads\nLog in with a wrong password and check an error message is shown",
@@ -15,9 +16,10 @@ const TEMPLATES: Record<string, string> = {
 
 const SAMPLES = [
   {
-    label: "Demo shop with seeded bugs",
+    label: "Demo shop: pass, fail, blocked",
     url: process.env.NEXT_PUBLIC_DEMO_URL ?? "",
-    checklist: "Sign up with a new account\nAdd two items to the cart and check the total\nApply coupon SAVE10 and check the 10% discount\nOpen the shipping policy from the footer",
+    checklist:
+      "Add the Enamel camp mug and the Canvas tote bag to the cart and check the cart total is $42.00\nWith those two items in the cart, apply coupon SAVE10 and check the total drops to $37.80\nSearch for \"bottle\" and check only the Steel water bottle is shown\nOpen Track order from the header and look up order FN-1042\nOpen the Shipping policy link in the footer and check the policy page loads",
   },
   {
     label: "SauceDemo, a real third-party site",
@@ -28,8 +30,14 @@ const SAMPLES = [
 ].filter((s) => s.url);
 
 const SEVERITIES: Severity[] = ["critical", "high", "medium", "low"];
+const SEVERITY_OPTIONS: Option<Severity>[] = [
+  { value: "critical", label: "Critical", tone: "critical" },
+  { value: "high", label: "High", tone: "high" },
+  { value: "medium", label: "Medium", tone: "medium" },
+  { value: "low", label: "Low", tone: "low" },
+];
 
-type Plan = { url: string; pageTitle: string; linkCount: number; cases: TestCase[]; warning?: string };
+type Plan = { url: string; pageTitle: string; linkCount: number; pagesRead?: number; cases: TestCase[]; warning?: string };
 
 async function post<T>(path: string, body: unknown): Promise<{ data?: T; error?: string }> {
   const res = await fetch(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
@@ -97,26 +105,54 @@ export default function NewRun() {
 
   return (
     <>
-      <section className="intro" aria-labelledby="intro-head">
-        <div>
-          <h1 id="intro-head">Test any live website in plain English</h1>
-          <p className="lead">Write what a tester would check. TinyFish agents run each case in a real browser and a separate verifier decides pass or fail.</p>
+      <section className="hero" aria-labelledby="intro-head">
+        <div className="hero__copy">
+          <span className="hero__badge">
+            <span className="hero__badge-dot" aria-hidden="true" />
+            Runs on TinyFish web agents
+          </span>
+          <h1 id="intro-head">
+            Test any live website <span className="hero__soft">in plain English.</span>
+          </h1>
+          <p className="lead">Write what a tester would check. TinyFish agents run each case in a real browser, and a separate verifier decides pass or fail.</p>
+          <ul className="hero__facts">
+            <li>No test code</li>
+            <li>Real cloud browsers</li>
+            <li>Screenshot-checked verdicts</li>
+          </ul>
         </div>
-        <ol className="route" aria-label="How a run works">
-          <li className="plate">
-            <span className="plate__figure">1</span>
-            <strong>Plan</strong>
-            <span>TinyFish Fetch reads the site. Your checklist becomes test cases you review.</span>
+
+        <ol className="flow" aria-label="How a run works">
+          <li className="flow__step">
+            <span className="flow__icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24" width="18" height="18"><path d="M8 6h11M8 12h11M8 18h11M4 6h.01M4 12h.01M4 18h.01" /></svg>
+            </span>
+            <div className="flow__body">
+              <strong>Plan</strong>
+              <span className="flow__chip">checklist to test cases</span>
+            </div>
           </li>
-          <li className="plate">
-            <span className="plate__figure">2</span>
-            <strong>Execute</strong>
-            <span>Each case runs as a TinyFish agent in its own browser, live.</span>
+          <li className="flow__step">
+            <span className="flow__icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24" width="18" height="18"><rect x="3" y="4" width="18" height="16" rx="2" /><path d="M3 9h18M10 13l4 2.5-4 2.5z" /></svg>
+            </span>
+            <div className="flow__body">
+              <strong>Execute</strong>
+              <span className="flow__chip flow__chip--live">live TinyFish browser</span>
+            </div>
           </li>
-          <li className="plate">
-            <span className="plate__figure">3</span>
-            <strong>Judge</strong>
-            <span>An independent verifier compares expected with observed and writes repro steps.</span>
+          <li className="flow__step">
+            <span className="flow__icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24" width="18" height="18"><path d="M12 3l7 3v5c0 4.5-3 8-7 10-4-2-7-5.5-7-10V6z" /><path d="M8.5 12l2.5 2.5 4.5-5" /></svg>
+            </span>
+            <div className="flow__body">
+              <strong>Judge</strong>
+              <span className="flow__verdicts">
+                <span className="verdict verdict--pass">PASS</span>
+                <span className="verdict verdict--fail">FAIL</span>
+                <span className="verdict verdict--blocked">BLOCKED</span>
+              </span>
+            </div>
           </li>
         </ol>
       </section>
@@ -190,7 +226,7 @@ export default function NewRun() {
             <div className="panel__head">
               <h2 id="review-head">2. Review {plan.cases.length} test cases</h2>
               <p className="muted">
-                TinyFish Fetch read <strong>{plan.pageTitle || plan.url}</strong> and found {plan.linkCount} links. Edit, delete or add cases before they run.
+                TinyFish Fetch read {plan.pagesRead ?? 1} page{plan.pagesRead === 1 ? "" : "s"} of <strong>{plan.pageTitle || plan.url}</strong> to write these cases. Edit, delete or add cases before they run.
               </p>
             </div>
             {bySeverity.length > 0 && (
@@ -220,12 +256,7 @@ export default function NewRun() {
                   <span className="case__id num">TC-{String(i + 1).padStart(2, "0")}</span>
                   <label className="visually-hidden" htmlFor={`${c.id}-title`}>Title of TC-{i + 1}</label>
                   <input id={`${c.id}-title`} className="case__title" value={c.title} placeholder="Test case title" onChange={(e) => edit(c.id, { title: e.target.value })} />
-                  <label className="visually-hidden" htmlFor={`${c.id}-sev`}>Severity</label>
-                  <select id={`${c.id}-sev`} value={c.severity} onChange={(e) => edit(c.id, { severity: e.target.value as Severity })}>
-                    {SEVERITIES.map((s) => (
-                      <option key={s} value={s}>{s}</option>
-                    ))}
-                  </select>
+                  <Select label="Severity" value={c.severity} options={SEVERITY_OPTIONS} onChange={(v) => edit(c.id, { severity: v })} />
                   <button type="button" className="link-btn" onClick={() => remove(c.id)} aria-label={`Delete TC-${i + 1}`}>
                     Delete
                   </button>

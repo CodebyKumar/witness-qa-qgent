@@ -88,6 +88,24 @@ export async function listRuns() {
   return all.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
 }
 
+/** Compact row for the history table and the sidebar. */
+export function summarize(run: Run) {
+  const r = Object.values(run.results);
+  const n = (v: string) => r.filter((x) => x.verdict === v).length;
+  return {
+    id: run.id,
+    url: run.url,
+    host: new URL(run.url).host,
+    createdAt: run.createdAt,
+    total: run.cases.length,
+    pass: n("PASS"),
+    fail: n("FAIL"),
+    other: n("BLOCKED") + n("ERROR"),
+    active: r.some(isActive),
+  };
+}
+export type RunSummary = ReturnType<typeof summarize>;
+
 const freshResult = (caseId: string): TestResult => ({ caseId, status: "queued", progress: [] });
 
 export async function startRun(id: string, url: string, cases: TestCase[]) {

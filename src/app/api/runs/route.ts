@@ -1,5 +1,5 @@
 import { randomBytes } from "node:crypto";
-import { getRun, startRun } from "@/lib/runs";
+import { getRun, listRuns, startRun, summarize } from "@/lib/runs";
 import type { TestCase } from "@/lib/types";
 
 const MAX_CASES = 20; // cap per run so one click can't burn the wallet
@@ -28,4 +28,8 @@ export async function POST(req: Request) {
   const id = `run-${Date.now().toString(36)}-${randomBytes(4).toString("hex")}`;
   await startRun(id, url, clean);
   return Response.json({ id });
+}
+
+export async function GET() {
+  return Response.json((await listRuns()).slice(0, 50).map(summarize));
 }
