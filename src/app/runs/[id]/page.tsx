@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { use, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import type { Run, RunControl, TestCase, TestResult, Verdict } from "@/lib/types";
@@ -25,6 +26,11 @@ export default function RunBoard({ params }: { params: Promise<{ id: string }> }
   const [missing, setMissing] = useState(false);
   const [selected, setSelected] = useState("");
   const [filter, setFilter] = useState<Filter>("All");
+  const [view, setView] = useState<"results" | "plan">("results");
+  // ?view=plan opens the test plan directly, so the plan can be linked and shared.
+  useEffect(() => {
+    if (new URLSearchParams(window.location.search).get("view") === "plan") setView("plan");
+  }, []);
   const [busy, setBusy] = useState("");
   const [error, setError] = useState("");
   const [connection, setConnection] = useState(0); // bump to reopen the stream after a retry
@@ -112,6 +118,16 @@ export default function RunBoard({ params }: { params: Promise<{ id: string }> }
 
   return (
     <>
+      <div className="print-only print-head">
+        <strong>Witness</strong>
+        <span>Test report, generated {new Date().toLocaleString()}</span>
+      </div>
+      <Link href="/runs" className="back no-print">
+        <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true">
+          <path d="M10 3.5L5.5 8l4.5 4.5" />
+        </svg>
+        Run history
+      </Link>
       <section className="run-head" aria-labelledby="run-title">
         <div className="run-head__title">
           <h1 id="run-title">{new URL(run.url).host}</h1>
@@ -146,9 +162,9 @@ export default function RunBoard({ params }: { params: Promise<{ id: string }> }
       {error && <p className="alert" role="alert">{error}</p>}
 
       <section className="summary" aria-label="Summary">
-        <div className="plate plate--figure">
-          <span className="plate__label">{active ? "Progress" : "Pass rate"}</span>
-          <span className="plate__big num">{active ? `${done.length}/${results.length}` : passRate === null ? "n/a" : `${passRate}%`}</span>
+        <div className="stat-main">
+          <span className="stat-main__label">{active ? "Progress" : "Pass rate"}</span>
+          <span className="stat-main__big num">{active ? `${done.length}/${results.length}` : passRate === null ? "n/a" : `${passRate}%`}</span>
           <span>
             {active ? "tests finished" : `${count("PASS")} of ${judged} judged tests passed`}
             {!active && judged < results.length && `, ${results.length - judged} not judged`}
@@ -161,6 +177,11 @@ export default function RunBoard({ params }: { params: Promise<{ id: string }> }
           <div><dt>Errors</dt><dd className="num">{count("ERROR")}</dd></div>
           <div><dt>{active ? "Remaining" : "Stopped"}</dt><dd className="num">{active ? results.length - done.length : results.filter((r) => r.status === "cancelled").length}</dd></div>
         </dl>
+        <div className="bar" role="img" aria-label={`${count("PASS")} passed, ${count("FAIL")} failed, ${count("BLOCKED") + count("ERROR")} blocked or errored, ${results.length - done.length} remaining`}>
+          {(["PASS", "FAIL", "BLOCKED", "ERROR"] as const).map((v) =>
+            count(v) ? <span key={v} className={`bar__seg bar__seg--${v.toLowerCase()}`} style={{ width: `${(count(v) / results.length) * 100}%` }} /> : null,
+          )}
+        </div>
         <p className="summary__line">
           {active
             ? `${results.filter((r) => r.status === "running" || r.status === "verifying").length} running on TinyFish, ${results.filter((r) => r.status === "queued").length} queued.`
@@ -174,8 +195,14 @@ export default function RunBoard({ params }: { params: Promise<{ id: string }> }
 
       <section aria-labelledby="board-head" className="board-wrap">
         <div className="board-bar">
-          <h2 id="board-head">Test cases</h2>
-          <div className="tabs no-print" role="group" aria-label="Filter by verdict">
+          <div className="board-bar__title">
+            <h2 id="board-head">Test cases</h2>
+            <div className="tabs no-print" role="group" aria-label="Choose view">
+              <button type="button" className="tab" aria-pressed={view === "results"} onClick={() => setView("results")}>Results</button>
+              <button type="button" className="tab" aria-pressed={view === "plan"} onClick={() => setView("plan")}>Test plan</button>
+            </div>
+          </div>
+          {view === "results" && <div className="tabs no-print" role="group" aria-label="Filter by verdict">
             {FILTERS.map((f) => {
               const n = f === "All" ? results.length : count(f);
               if (f !== "All" && n === 0) return null;
@@ -185,8 +212,11 @@ export default function RunBoard({ params }: { params: Promise<{ id: string }> }
                 </button>
               );
             })}
-          </div>
+          </div>}
         </div>
+        {view === "plan" ? (
+          <TestPlan run={run} />
+        ) : (
         <div className="table-wrap">
           <table className="board">
             <thead>
@@ -214,7 +244,7 @@ export default function RunBoard({ params }: { params: Promise<{ id: string }> }
                       {(r.status === "done" || r.status === "cancelled") && r.reason && <span className="row-sub">{r.reason}</span>}
                     </td>
                     <td><span className={`sev sev--${c.severity}`}>{c.severity}</span></td>
-                    <td className={`status status--${r.status}`}>{r.status}</td>
+                    <td><span className={`status status--${r.status}`}>{r.status}</span></td>
                     <td>{r.verdict ? <span className={`verdict verdict--${r.verdict.toLowerCase()}`}>{r.verdict}</span> : <span className="muted">-</span>}</td>
                     <td className="num">{r.numSteps ?? (r.progress.length || "")}</td>
                     <td className="num">{seconds(r)}</td>
@@ -232,6 +262,7 @@ export default function RunBoard({ params }: { params: Promise<{ id: string }> }
             </tbody>
           </table>
         </div>
+        )}
       </section>
 
       <section className="split" aria-label="Selected test case">
@@ -245,7 +276,7 @@ export default function RunBoard({ params }: { params: Promise<{ id: string }> }
         </aside>
       </section>
 
-      <section className="print-only" aria-label="All findings">
+      <section className="print-only findings" aria-label="All findings">
         <h2>All test cases</h2>
         {ordered.map((c) => (
           <CaseDetail key={c.id} run={run} tc={c} r={run.results[c.id]} />
@@ -309,6 +340,42 @@ function Evidence({ r }: { r: TestResult }) {
   );
 }
 
+/** The plan exactly as the planner wrote it and the tester approved it, before anything ran. */
+function TestPlan({ run }: { run: Run }) {
+  return (
+    <ol className="plan">
+      {run.cases.map((c) => (
+        <li key={c.id} className="plan__case">
+          <div className="plan__head">
+            <span className="num muted">{tcLabel(run, c.id)}</span>
+            <strong>{c.title}</strong>
+            <span className={`sev sev--${c.severity}`}>{c.severity}</span>
+            {c.autoAdded && <span className="tag">Negative case, added by planner</span>}
+            {c.destructive && <span className="tag tag--warn">{c.allowSubmit ? "Destructive, final submit allowed" : "Destructive, final submit blocked"}</span>}
+          </div>
+          <div className="plan__grid">
+            <div>
+              <h4>Steps</h4>
+              <ol className="steps">{c.steps.map((s, i) => <li key={i}>{stripNum(s)}</li>)}</ol>
+            </div>
+            <div>
+              <h4>Expected result</h4>
+              <p>{c.expected}</p>
+              {c.testData && (
+                <>
+                  <h4>Test data</h4>
+                  <p className="num small">{c.testData}</p>
+                </>
+              )}
+              {c.clarification && <p className="note">Planner assumption: {c.clarification}</p>}
+            </div>
+          </div>
+        </li>
+      ))}
+    </ol>
+  );
+}
+
 function CaseDetail({ run, tc, r }: { run: Run; tc: TestCase; r: TestResult }) {
   return (
     <article className="detail">
@@ -320,7 +387,7 @@ function CaseDetail({ run, tc, r }: { run: Run; tc: TestCase; r: TestResult }) {
         {r.verdict ? <span className={`verdict verdict--${r.verdict.toLowerCase()}`}>{r.verdict}</span> : <span className={`status status--${r.status}`}>{r.status}</span>}
       </header>
       {r.reason && <p className="detail__reason">{r.reason}</p>}
-      {r.verdict && r.verdict !== "ERROR" && (
+      {r.verdict && r.verdict !== "ERROR" && r.checkedScreenshot !== undefined && (
         <p className="muted small">{r.checkedScreenshot ? "Verified against the final screenshot." : "Verified from the agent's report only."}</p>
       )}
 
