@@ -1,0 +1,28 @@
+{
+  "name": "tinyfish-qa",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "smoke": "node --env-file=.env.local --experimental-strip-types scripts/smoke.ts",
+    "check": "node --experimental-strip-types scripts/llm-fallback.check.ts"
+  },
+  "dependencies": {
+    "@tiny-fish/sdk": "^0.11.0",
+    "next": "^15.5.28",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1",
+    "zod": "^3.25.76"
+  },
+  "devDependencies": {
+    "@eslint/eslintrc": "^3.3.7",
+    "@types/node": "^26.6.6",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "eslint": "^9.39.5",
+    "eslint-config-next": "^15.5.28",
+    "typescript": "^5.9.3"
+  }
+}
