@@ -43,3 +43,7 @@ next-env.d.ts
 /data
 .env*.local
 !.env.example
+
+# presentation notes, kept local
+/JUDGE-QA.md
+/PPT-SUBMISSION.md
